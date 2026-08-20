@@ -1,0 +1,174 @@
+{% extends "core/base.html" %}
+{% block title %}Dashboard - Crypto Intel{% endblock %}
+{% block content %}
+<div class="space-y-8 fade-in">
+  <div>
+    <h1 class="text-2xl font-bold text-white">Dashboard</h1>
+    <p class="text-gray-400 text-sm mt-1">Crypto Intelligence Platform overview</p>
+  </div>
+
+  <!-- Stats cards -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div class="text-sm text-gray-400">Total Assets</div>
+      <div class="text-3xl font-bold text-white mt-1">{{ total_assets|floatformat:0 }}</div>
+      <div class="text-xs text-gray-500 mt-1">Market cap $10M-$2B</div>
+    </div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div class="text-sm text-gray-400">Score Snapshots</div>
+      <div class="text-3xl font-bold text-white mt-1">{{ total_scores|floatformat:0 }}</div>
+      <div class="text-xs text-gray-500 mt-1">Across 4 models</div>
+    </div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div class="text-sm text-gray-400">DeFi Protocols</div>
+      <div class="text-3xl font-bold text-white mt-1">{{ total_protocols }}</div>
+      <div class="text-xs text-gray-500 mt-1">TVL & fee tracking</div>
+    </div>
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+      <div class="text-sm text-gray-400">Data Points</div>
+      <div class="text-3xl font-bold text-white mt-1">{{ total_snapshots|floatformat:0 }}</div>
+      <div class="text-xs text-gray-500 mt-1">Market snapshots</div>
+    </div>
+  </div>
+
+  <!-- Sector breakdown -->
+  {% if sector_data %}
+  <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+    <h2 class="text-lg font-semibold text-white mb-4">Sector Breakdown</h2>
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      {% for sector_key, sector_label, count in sector_data %}
+      <a href="{% url 'core:asset-list' %}?sector={{ sector_key }}" class="bg-gray-800 hover:bg-gray-750 border border-gray-700 rounded-lg p-3 transition group">
+        <div class="text-xs text-gray-400 group-hover:text-gray-300">{{ sector_label }}</div>
+        <div class="text-xl font-bold text-white mt-1">{{ count }}</div>
+      </a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Top scores row -->
+  <div class="grid lg:grid-cols-3 gap-6">
+    <!-- 10X Potential -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold text-white">Top 10X Potential</h2>
+        <a href="{% url 'core:rankings' %}?model=10x_potential" class="text-xs text-emerald-400 hover:text-emerald-300">View all</a>
+      </div>
+      <div class="space-y-3">
+        {% for s in top_10x %}
+        <a href="{% url 'core:asset-detail' asset_id=s.asset.id %}" class="flex items-center justify-between p-2 rounded-lg hover:bg-gray-800 transition">
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-mono text-gray-500 w-5">{{ forloop.counter }}</span>
+            <div>
+              <div class="text-sm font-medium text-white">{{ s.asset.symbol|upper }}</div>
+              <div class="text-xs text-gray-400">{{ s.asset.name|truncatechars:25 }}</div>
+            </div>
+          </div>
+          <div class="text-right">
+            <div class="text-sm font-bold text-emerald-400">{{ s.score }}</div>
+            <div class="text-xs text-gray-500">{{ s.data_confidence|floatformat:0 }}% conf</div>
+          </div>
+        </a>
+        {% empty %}
+        <div class="text-sm text-gray-500">No scores yet</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Momentum -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold text-white">Top Momentum</h2>
+        <a href="{% url 'core:rankings' %}?model=momentum" class="text-xs text-blue-400 hover:text-blue-300">View all</a>
+      </div>
+      <div class="space-y-3">
+        {% for s in top_momentum %}
+        <a href="{% url 'core:asset-detail' asset_id=s.asset.id %}" class="flex items-center justify-between p-2 rounded-lg hover:bg-gray-800 transition">
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-mono text-gray-500 w-5">{{ forloop.counter }}</span>
+            <div>
+              <div class="text-sm font-medium text-white">{{ s.asset.symbol|upper }}</div>
+              <div class="text-xs text-gray-400">{{ s.asset.name|truncatechars:25 }}</div>
+            </div>
+          </div>
+          <div class="text-right">
+            <div class="text-sm font-bold text-blue-400">{{ s.score }}</div>
+            <div class="text-xs text-gray-500">{{ s.data_confidence|floatformat:0 }}% conf</div>
+          </div>
+        </a>
+        {% empty %}
+        <div class="text-sm text-gray-500">No scores yet</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Undervalued -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold text-white">Most Undervalued</h2>
+        <a href="{% url 'core:rankings' %}?model=undervaluation" class="text-xs text-purple-400 hover:text-purple-300">View all</a>
+      </div>
+      <div class="space-y-3">
+        {% for s in top_undervalued %}
+        <a href="{% url 'core:asset-detail' asset_id=s.asset.id %}" class="flex items-center justify-between p-2 rounded-lg hover:bg-gray-800 transition">
+          <div class="flex items-center gap-3">
+            <span class="text-xs font-mono text-gray-500 w-5">{{ forloop.counter }}</span>
+            <div>
+              <div class="text-sm font-medium text-white">{{ s.asset.symbol|upper }}</div>
+              <div class="text-xs text-gray-400">{{ s.asset.name|truncatechars:25 }}</div>
+            </div>
+          </div>
+          <div class="text-right">
+            <div class="text-sm font-bold text-purple-400">{{ s.score }}</div>
+            <div class="text-xs text-gray-500">{{ s.data_confidence|floatformat:0 }}% conf</div>
+          </div>
+        </a>
+        {% empty %}
+        <div class="text-sm text-gray-500">No scores yet</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent ingestion jobs -->
+  {% if latest_jobs %}
+  <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+    <h2 class="text-lg font-semibold text-white mb-4">Recent Ingestion Jobs</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-gray-400 border-b border-gray-800">
+            <th class="text-left py-2 font-medium">Provider</th>
+            <th class="text-left py-2 font-medium">Job Type</th>
+            <th class="text-left py-2 font-medium">Status</th>
+            <th class="text-right py-2 font-medium">Attempted</th>
+            <th class="text-right py-2 font-medium">Succeeded</th>
+            <th class="text-right py-2 font-medium">Started</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800">
+          {% for job in latest_jobs %}
+          <tr>
+            <td class="py-2 text-white">{{ job.provider }}</td>
+            <td class="py-2 text-gray-300">{{ job.job_type }}</td>
+            <td class="py-2">
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium
+                {% if job.status == 'success' %}bg-emerald-900/50 text-emerald-300
+                {% elif job.status == 'failed' %}bg-red-900/50 text-red-300
+                {% elif job.status == 'running' %}bg-blue-900/50 text-blue-300
+                {% else %}bg-yellow-900/50 text-yellow-300{% endif %}">
+                {{ job.status }}
+              </span>
+            </td>
+            <td class="py-2 text-right text-gray-300">{{ job.assets_attempted }}</td>
+            <td class="py-2 text-right text-gray-300">{{ job.assets_succeeded }}</td>
+            <td class="py-2 text-right text-gray-500 text-xs">{{ job.started_at|date:"M d H:i" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

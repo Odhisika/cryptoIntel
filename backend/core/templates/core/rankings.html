@@ -1,0 +1,98 @@
+{% extends "core/base.html" %}
+{% block title %}Rankings - Crypto Intel{% endblock %}
+{% block content %}
+<div class="space-y-6 fade-in">
+  <div>
+    <h1 class="text-2xl font-bold text-white">Score Rankings</h1>
+    <p class="text-gray-400 text-sm mt-1">Assets ranked by score model</p>
+  </div>
+
+  <!-- Model selector -->
+  <div class="flex flex-wrap gap-3 items-center">
+    <div class="flex bg-gray-900 border border-gray-800 rounded-lg p-1">
+      {% for value, label in model_choices %}
+      <a href="?model={{ value }}&min_confidence={{ min_confidence }}"
+         class="px-4 py-2 rounded-md text-sm font-medium transition
+         {% if model_name == value %}bg-emerald-600 text-white{% else %}text-gray-400 hover:text-white hover:bg-gray-800{% endif %}">
+        {{ label }}
+      </a>
+      {% endfor %}
+    </div>
+    <div class="flex items-center gap-2 ml-auto">
+      <label class="text-sm text-gray-400">Min confidence:</label>
+      <select onchange="window.location='?model={{ model_name }}&min_confidence='+this.value"
+              class="bg-gray-900 border border-gray-700 text-white text-sm rounded-lg px-3 py-2">
+        <option value="0" {% if min_confidence == "0" %}selected{% endif %}>Any</option>
+        <option value="0.1" {% if min_confidence == "0.1" %}selected{% endif %}>10%+</option>
+        <option value="0.2" {% if min_confidence == "0.2" %}selected{% endif %}>20%+</option>
+        <option value="0.3" {% if min_confidence == "0.3" %}selected{% endif %}>30%+</option>
+        <option value="0.5" {% if min_confidence == "0.5" %}selected{% endif %}>50%+</option>
+        <option value="0.7" {% if min_confidence == "0.7" %}selected{% endif %}>70%+</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Rankings table -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-gray-400 border-b border-gray-800 bg-gray-900/50">
+            <th class="text-left py-3 px-4 font-medium w-12">#</th>
+            <th class="text-left py-3 px-4 font-medium">Asset</th>
+            <th class="text-left py-3 px-4 font-medium">Sector</th>
+            <th class="text-right py-3 px-4 font-medium">Score</th>
+            <th class="text-left py-3 px-4 font-medium w-40">Score Bar</th>
+            <th class="text-right py-3 px-4 font-medium">Confidence</th>
+            <th class="text-right py-3 px-4 font-medium">Version</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800/50">
+          {% for s in scores %}
+          <tr class="hover:bg-gray-800/50 transition cursor-pointer" onclick="window.location='{% url 'core:asset-detail' asset_id=s.asset.id %}'">
+            <td class="py-3 px-4 text-gray-500 font-mono text-xs">{{ forloop.counter }}</td>
+            <td class="py-3 px-4">
+              <div class="font-medium text-white">{{ s.asset.symbol|upper }}</div>
+              <div class="text-xs text-gray-400">{{ s.asset.name|truncatechars:25 }}</div>
+            </td>
+            <td class="py-3 px-4">
+              {% if s.asset.sector %}
+              <span class="text-xs text-gray-300">{{ s.asset.get_sector_display }}</span>
+              {% else %}
+              <span class="text-gray-600 text-xs">-</span>
+              {% endif %}
+            </td>
+            <td class="py-3 px-4 text-right">
+              <span class="text-lg font-bold font-mono
+                {% if model_name == 'risk' %}
+                  {% if s.score >= 66 %}text-red-400{% elif s.score >= 33 %}text-yellow-400{% else %}text-emerald-400{% endif %}
+                {% else %}
+                  {% if s.score >= 70 %}text-emerald-400{% elif s.score >= 50 %}text-yellow-400{% elif s.score >= 30 %}text-orange-400{% else %}text-red-400{% endif %}
+                {% endif %}">{{ s.score }}</span>
+            </td>
+            <td class="py-3 px-4">
+              <div class="w-full bg-gray-800 rounded-full h-2">
+                <div class="h-2 rounded-full score-bar
+                  {% if model_name == 'risk' %}
+                    {% if s.score >= 66 %}bg-red-500{% elif s.score >= 33 %}bg-yellow-500{% else %}bg-emerald-500{% endif %}
+                  {% else %}
+                    {% if s.score >= 70 %}bg-emerald-500{% elif s.score >= 50 %}bg-yellow-500{% elif s.score >= 30 %}bg-orange-500{% else %}bg-red-500{% endif %}
+                  {% endif %}" style="width: {{ s.score }}%"></div>
+              </div>
+            </td>
+            <td class="py-3 px-4 text-right text-sm text-gray-400">
+              {{ s.data_confidence|floatformat:0 }}%
+            </td>
+            <td class="py-3 px-4 text-right text-xs text-gray-500">{{ s.model_version }}</td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="7" class="py-8 text-center text-gray-500">No scores found for this model.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

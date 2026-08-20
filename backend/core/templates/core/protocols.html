@@ -1,0 +1,106 @@
+{% extends "core/base.html" %}
+{% block title %}Protocols - Crypto Intel{% endblock %}
+{% block content %}
+<div class="space-y-6 fade-in">
+  <div>
+    <h1 class="text-2xl font-bold text-white">DeFi Protocols</h1>
+    <p class="text-gray-400 text-sm mt-1">TVL, fees and revenue tracking from DefiLlama</p>
+  </div>
+
+  <!-- Filters -->
+  <form method="get" class="flex flex-wrap gap-3 items-center">
+    <div class="relative flex-1 min-w-[200px]">
+      <input type="text" name="search" value="{{ query }}" placeholder="Search protocols..."
+             class="w-full bg-gray-900 border border-gray-700 text-white text-sm rounded-lg pl-10 pr-4 py-2.5 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+      <svg class="absolute left-3 top-3 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+    </div>
+    <select name="category" class="bg-gray-900 border border-gray-700 text-white text-sm rounded-lg px-3 py-2.5 focus:border-emerald-500">
+      <option value="">All Categories</option>
+      {% for cat in categories %}
+      <option value="{{ cat }}" {% if selected_category == cat %}selected{% endif %}>{{ cat }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition">Filter</button>
+  </form>
+
+  <!-- Protocol table -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-gray-400 border-b border-gray-800 bg-gray-900/50">
+            <th class="text-left py-3 px-4 font-medium">#</th>
+            <th class="text-left py-3 px-4 font-medium">Protocol</th>
+            <th class="text-left py-3 px-4 font-medium">Category</th>
+            <th class="text-left py-3 px-4 font-medium">Chains</th>
+            <th class="text-right py-3 px-4 font-medium">TVL</th>
+            <th class="text-right py-3 px-4 font-medium">Fees/24h</th>
+            <th class="text-right py-3 px-4 font-medium">Revenue/24h</th>
+            <th class="text-left py-3 px-4 font-medium">Token</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800/50">
+          {% for proto in protocols %}
+          <tr class="hover:bg-gray-800/50 transition">
+            <td class="py-3 px-4 text-gray-500 font-mono text-xs">{{ forloop.counter }}</td>
+            <td class="py-3 px-4">
+              <div class="font-medium text-white">{{ proto.name }}</div>
+              <div class="text-xs text-gray-400">{{ proto.slug }}</div>
+            </td>
+            <td class="py-3 px-4">
+              <span class="text-xs text-gray-300">{{ proto.category|default:"-" }}</span>
+            </td>
+            <td class="py-3 px-4">
+              <div class="flex flex-wrap gap-1">
+                {% for chain in proto.chains|slice:":3" %}
+                <span class="text-xs px-1.5 py-0.5 bg-gray-800 text-gray-400 rounded">{{ chain }}</span>
+                {% endfor %}
+                {% if proto.chains|length > 3 %}
+                <span class="text-xs text-gray-500">+{{ proto.chains|length|add:"-3" }}</span>
+                {% endif %}
+              </div>
+            </td>
+            <td class="py-3 px-4 text-right text-white font-mono">
+              {% if proto.tvl_snapshots.first.tvl_usd %}
+                {% if proto.tvl_snapshots.first.tvl_usd >= 1000000000 %}${{ proto.tvl_snapshots.first.tvl_usd|floatformat:2 }}B
+                {% elif proto.tvl_snapshots.first.tvl_usd >= 1000000 %}${{ proto.tvl_snapshots.first.tvl_usd|floatformat:2 }}M
+                {% else %}${{ proto.tvl_snapshots.first.tvl_usd|floatformat:0 }}{% endif %}
+              {% else %}-{% endif %}
+            </td>
+            <td class="py-3 px-4 text-right text-white font-mono">
+              {% if proto.fee_snapshots.first.fees_24h_usd %}
+                {% if proto.fee_snapshots.first.fees_24h_usd >= 1000000 %}${{ proto.fee_snapshots.first.fees_24h_usd|floatformat:2 }}M
+                {% elif proto.fee_snapshots.first.fees_24h_usd >= 1000 %}${{ proto.fee_snapshots.first.fees_24h_usd|floatformat:0 }}
+                {% else %}${{ proto.fee_snapshots.first.fees_24h_usd }}{% endif %}
+              {% else %}-{% endif %}
+            </td>
+            <td class="py-3 px-4 text-right text-white font-mono">
+              {% if proto.revenue_snapshots.first.revenue_24h_usd %}
+                {% if proto.revenue_snapshots.first.revenue_24h_usd >= 1000000 %}${{ proto.revenue_snapshots.first.revenue_24h_usd|floatformat:2 }}M
+                {% elif proto.revenue_snapshots.first.revenue_24h_usd >= 1000 %}${{ proto.revenue_snapshots.first.revenue_24h_usd|floatformat:0 }}
+                {% else %}${{ proto.revenue_snapshots.first.revenue_24h_usd }}{% endif %}
+              {% else %}-{% endif %}
+            </td>
+            <td class="py-3 px-4">
+              {% if proto.asset %}
+              <a href="{% url 'core:asset-detail' asset_id=proto.asset.id %}" class="text-emerald-400 hover:text-emerald-300 text-xs font-medium">
+                {{ proto.asset.symbol|upper }}
+              </a>
+              {% else %}
+              <span class="text-gray-600 text-xs">-</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="8" class="py-8 text-center text-gray-500">No protocols found.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

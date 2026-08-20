@@ -1,0 +1,143 @@
+{% extends "core/base.html" %}
+{% block title %}Assets - Crypto Intel{% endblock %}
+{% block content %}
+<div class="space-y-6 fade-in">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold text-white">Assets</h1>
+      <p class="text-gray-400 text-sm mt-1">{{ total }} assets tracked</p>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <form method="get" class="flex flex-wrap gap-3 items-center">
+    <div class="relative flex-1 min-w-[200px]">
+      <input type="text" name="search" value="{{ query }}" placeholder="Search by name or symbol..."
+             class="w-full bg-gray-900 border border-gray-700 text-white text-sm rounded-lg pl-10 pr-4 py-2.5 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+      <svg class="absolute left-3 top-3 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+    </div>
+    <select name="sector" class="bg-gray-900 border border-gray-700 text-white text-sm rounded-lg px-3 py-2.5 focus:border-emerald-500">
+      <option value="">All Sectors</option>
+      {% for value, label in sectors %}
+      <option value="{{ value }}" {% if selected_sector == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <select name="sort" class="bg-gray-900 border border-gray-700 text-white text-sm rounded-lg px-3 py-2.5 focus:border-emerald-500">
+      <option value="-market_cap_usd" {% if sort == "-market_cap_usd" %}selected{% endif %}>Market Cap ↓</option>
+      <option value="market_cap_usd" {% if sort == "market_cap_usd" %}selected{% endif %}>Market Cap ↑</option>
+      <option value="name" {% if sort == "name" %}selected{% endif %}>Name A-Z</option>
+      <option value="-name" {% if sort == "-name" %}selected{% endif %}>Name Z-A</option>
+      <option value="symbol" {% if sort == "symbol" %}selected{% endif %}>Symbol A-Z</option>
+      <option value="sector" {% if sort == "sector" %}selected{% endif %}>Sector</option>
+    </select>
+    <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg px-4 py-2.5 transition">Filter</button>
+  </form>
+
+  <!-- Asset table -->
+  <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-gray-400 border-b border-gray-800 bg-gray-900/50">
+            <th class="text-left py-3 px-4 font-medium">#</th>
+            <th class="text-left py-3 px-4 font-medium">Asset</th>
+            <th class="text-left py-3 px-4 font-medium">Sector</th>
+            <th class="text-right py-3 px-4 font-medium">Price</th>
+            <th class="text-right py-3 px-4 font-medium">Market Cap</th>
+            <th class="text-right py-3 px-4 font-medium">10X</th>
+            <th class="text-right py-3 px-4 font-medium">Momentum</th>
+            <th class="text-right py-3 px-4 font-medium">Underval.</th>
+            <th class="text-right py-3 px-4 font-medium">Risk</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-800/50">
+          {% for item in asset_data %}
+          <tr class="hover:bg-gray-800/50 transition cursor-pointer" onclick="window.location='{% url 'core:asset-detail' asset_id=item.asset.id %}'">
+            <td class="py-3 px-4 text-gray-500 font-mono text-xs">{{ forloop.counter0|add:1|add:page|add:"-1" }}</td>
+            <td class="py-3 px-4">
+              <div class="flex items-center gap-3">
+                <div>
+                  <div class="font-medium text-white">{{ item.asset.symbol|upper }}</div>
+                  <div class="text-xs text-gray-400">{{ item.asset.name|truncatechars:20 }}</div>
+                </div>
+              </div>
+            </td>
+            <td class="py-3 px-4">
+              {% if item.asset.sector %}
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-800 text-gray-300 border border-gray-700">{{ item.asset.get_sector_display }}</span>
+              {% else %}
+              <span class="text-gray-600 text-xs">-</span>
+              {% endif %}
+            </td>
+            <td class="py-3 px-4 text-right text-white font-mono">
+              {% if item.snap %}{{ item.snap.price_usd }}{% else %}-{% endif %}
+            </td>
+            <td class="py-3 px-4 text-right text-white font-mono">
+              {% if item.snap and item.snap.market_cap_usd %}
+                {% if item.snap.market_cap_usd >= 1000000000 %}{{ item.snap.market_cap_usd|floatformat:1 }}B
+                {% elif item.snap.market_cap_usd >= 1000000 %}{{ item.snap.market_cap_usd|floatformat:1 }}M
+                {% else %}{{ item.snap.market_cap_usd|floatformat:0 }}{% endif %}
+              {% else %}-{% endif %}
+            </td>
+            <td class="py-3 px-4 text-right">
+              {% if item.scores.10x_potential %}
+              <span class="font-mono text-xs {% if item.scores.10x_potential.score >= 70 %}text-emerald-400{% elif item.scores.10x_potential.score >= 50 %}text-yellow-400{% elif item.scores.10x_potential.score >= 30 %}text-orange-400{% else %}text-red-400{% endif %}">
+                {{ item.scores.10x_potential.score|floatformat:1 }}
+              </span>
+              {% else %}<span class="text-gray-600 text-xs">-</span>{% endif %}
+            </td>
+            <td class="py-3 px-4 text-right">
+              {% if item.scores.momentum %}
+              <span class="font-mono text-xs {% if item.scores.momentum.score >= 70 %}text-emerald-400{% elif item.scores.momentum.score >= 50 %}text-yellow-400{% elif item.scores.momentum.score >= 30 %}text-orange-400{% else %}text-red-400{% endif %}">
+                {{ item.scores.momentum.score|floatformat:1 }}
+              </span>
+              {% else %}<span class="text-gray-600 text-xs">-</span>{% endif %}
+            </td>
+            <td class="py-3 px-4 text-right">
+              {% if item.scores.undervaluation %}
+              <span class="font-mono text-xs {% if item.scores.undervaluation.score >= 70 %}text-emerald-400{% elif item.scores.undervaluation.score >= 50 %}text-yellow-400{% elif item.scores.undervaluation.score >= 30 %}text-orange-400{% else %}text-red-400{% endif %}">
+                {{ item.scores.undervaluation.score|floatformat:1 }}
+              </span>
+              {% else %}<span class="text-gray-600 text-xs">-</span>{% endif %}
+            </td>
+            <td class="py-3 px-4 text-right">
+              {% if item.scores.risk %}
+              <span class="font-mono text-xs {% if item.scores.risk.score >= 66 %}text-red-400{% elif item.scores.risk.score >= 33 %}text-yellow-400{% else %}text-emerald-400{% endif %}">
+                {{ item.scores.risk.score|floatformat:1 }}
+              </span>
+              {% else %}<span class="text-gray-600 text-xs">-</span>{% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="9" class="py-8 text-center text-gray-500">No assets found matching your filters.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Pagination -->
+  {% if total_pages > 1 %}
+  <div class="flex items-center justify-center gap-2">
+    {% if page > 1 %}
+    <a href="?page={{ page|add:"-1" }}&search={{ query }}&sector={{ selected_sector }}&sort={{ sort }}"
+       class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-300 hover:bg-gray-700 transition">Prev</a>
+    {% endif %}
+
+    {% for p in total_pages|make_list %}
+    {% endfor %}
+
+    <span class="px-3 py-2 text-sm text-gray-400">Page {{ page }} of {{ total_pages }}</span>
+
+    {% if page < total_pages %}
+    <a href="?page={{ page|add:"1" }}&search={{ query }}&sector={{ selected_sector }}&sort={{ sort }}"
+       class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-300 hover:bg-gray-700 transition">Next</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

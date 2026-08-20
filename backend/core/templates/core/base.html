@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-950">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Crypto Intel{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4/dist/ext/client-side-templates.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            dark: { 50:'#f8fafc',100:'#f1f5f9',200:'#e2e8f0',300:'#cbd5e1',400:'#94a3b8',500:'#64748b',600:'#475569',700:'#334155',800:'#1e293b',900:'#0f172a',950:'#020617' },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-block; }
+    .htmx-request.htmx-indicator { display: inline-block; }
+    [hx-indicator] .htmx-indicator { display: none; }
+    [hx-indicator].htmx-request .htmx-indicator { display: inline-block; }
+    .fade-in { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .score-bar { transition: width 0.5s ease-out; }
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body class="h-full">
+  <nav class="bg-gray-900 border-b border-gray-800 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center gap-8">
+          <a href="{% url 'core:dashboard' %}" class="flex items-center gap-2">
+            <div class="w-8 h-8 bg-emerald-500 rounded-lg flex items-center justify-center">
+              <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+              </svg>
+            </div>
+            <span class="text-white font-bold text-lg">CryptoIntel</span>
+          </a>
+          <div class="hidden md:flex items-center gap-1">
+            <a href="{% url 'core:dashboard' %}" class="nav-link px-3 py-2 rounded-md text-sm font-medium text-gray-300 hover:text-white hover:bg-gray-800 transition">Dashboard</a>
+            <a href="{% url 'core:asset-list' %}" class="nav-link px-3 py-2 rounded-md text-sm font-medium text-gray-300 hover:text-white hover:bg-gray-800 transition">Assets</a>
+            <a href="{% url 'core:rankings' %}" class="nav-link px-3 py-2 rounded-md text-sm font-medium text-gray-300 hover:text-white hover:bg-gray-800 transition">Rankings</a>
+            <a href="{% url 'core:protocols' %}" class="nav-link px-3 py-2 rounded-md text-sm font-medium text-gray-300 hover:text-white hover:bg-gray-800 transition">Protocols</a>
+          </div>
+        </div>
+        <div class="relative" hx-get="{% url 'core:api-search' %}?q={value}" hx-trigger="keyup changed delay:300ms" hx-target="#search-results" hx-indicator="#search-indicator">
+          <div class="relative">
+            <input id="search-input" type="text" placeholder="Search assets..." name="q"
+                   class="bg-gray-800 text-white text-sm rounded-lg pl-10 pr-4 py-2 border border-gray-700 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 w-64"
+                   hx-get="{% url 'core:api-search' %}" hx-trigger="keyup changed delay:300ms" hx-target="#search-results" hx-vals='js:{"q": document.getElementById("search-input").value}'
+                   autocomplete="off">
+            <svg class="absolute left-3 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <div id="search-indicator" class="htmx-indicator absolute right-3 top-2.5">
+              <div class="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+          </div>
+          <div id="search-results" class="absolute right-0 mt-2 w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 hidden"></div>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script>
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+      if (e.detail.target.id === 'search-results') {
+        e.detail.target.classList.remove('hidden');
+      }
+    });
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('[hx-get]') && !e.target.closest('#search-results')) {
+        document.getElementById('search-results').classList.add('hidden');
+      }
+    });
+    function fmtPrice(v) {
+      if (!v || v === '-') return '-';
+      let n = parseFloat(v);
+      if (n >= 1) return '$' + n.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+      if (n >= 0.01) return '$' + n.toFixed(4);
+      return '$' + n.toFixed(8);
+    }
+    function fmtMcap(v) {
+      if (!v || v === '-') return '-';
+      let n = parseFloat(v);
+      if (n >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
+      if (n >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
+      if (n >= 1e3) return '$' + (n/1e3).toFixed(1) + 'K';
+      return '$' + n.toFixed(2);
+    }
+    function fmtScore(v) {
+      if (!v) return '-';
+      return parseFloat(v).toFixed(1);
+    }
+    function scoreColor(v, invert) {
+      if (!v) return 'text-gray-500';
+      let n = parseFloat(v);
+      if (invert) n = 100 - n;
+      if (n >= 70) return 'text-emerald-400';
+      if (n >= 50) return 'text-yellow-400';
+      if (n >= 30) return 'text-orange-400';
+      return 'text-red-400';
+    }
+    function scoreBg(v, invert) {
+      if (!v) return 'bg-gray-700';
+      let n = parseFloat(v);
+      if (invert) n = 100 - n;
+      if (n >= 70) return 'bg-emerald-500';
+      if (n >= 50) return 'bg-yellow-500';
+      if (n >= 30) return 'bg-orange-500';
+      return 'bg-red-500';
+    }
+  </script>
+</body>
+</html>
