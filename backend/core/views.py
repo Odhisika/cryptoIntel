@@ -18,6 +18,7 @@ from .serializers import (
     CatalystSerializer, IngestionJobSerializer,
     DataQualityIssueSerializer,
 )
+from .scoring.tiers import classify_tier, RewardTier, TIER_LABELS
 
 
 class AssetListView(generics.ListAPIView):
@@ -40,6 +41,16 @@ class AssetListView(generics.ListAPIView):
         if sector:
             qs = qs.filter(sector=sector)
 
+        # tier filter — filter assets by their computed risk/reward tier
+        tier = self.request.query_params.get("tier")
+        if tier:
+            valid_tiers = [t.value for t in RewardTier] + ["unclassified"]
+            if tier in valid_tiers:
+                # We can't filter by tier in the DB directly since it's
+                # computed from scores. Instead, we filter in-memory after
+                # fetching. For large datasets, consider caching tiers.
+                qs = self._filter_by_tier(qs, tier)
+
         # active filter
         is_active = self.request.query_params.get("is_active")
         if is_active is not None:
@@ -58,6 +69,37 @@ class AssetListView(generics.ListAPIView):
             qs = qs.order_by(sort)
 
         return qs
+
+    def _filter_by_tier(self, qs, tier_value):
+        """Filter queryset by computed tier. Computed in Python since tier
+        depends on 4 scores that can't be expressed in a single DB query."""
+        asset_ids = []
+        for asset in qs:
+            scores = {}
+            for model_name in ["10x_potential", "undervaluation", "momentum", "risk"]:
+                snap = asset.score_snapshots.filter(model_name=model_name).order_by("-computed_at").first()
+                if snap:
+                    scores[model_name] = snap
+
+            if not scores:
+                if tier_value == "unclassified":
+                    asset_ids.append(asset.id)
+                continue
+
+            tier_result = classify_tier(
+                score_10x=scores.get("10x_potential").score if "10x_potential" in scores else None,
+                score_risk=scores.get("risk").score if "risk" in scores else None,
+                score_momentum=scores.get("momentum").score if "momentum" in scores else None,
+                score_undervaluation=scores.get("undervaluation").score if "undervaluation" in scores else None,
+                data_confidence_10x=scores.get("10x_potential").data_confidence if "10x_potential" in scores else None,
+                data_confidence_risk=scores.get("risk").data_confidence if "risk" in scores else None,
+                data_confidence_momentum=scores.get("momentum").data_confidence if "momentum" in scores else None,
+                data_confidence_undervaluation=scores.get("undervaluation").data_confidence if "undervaluation" in scores else None,
+            )
+            if tier_result.tier.value == tier_value:
+                asset_ids.append(asset.id)
+
+        return qs.filter(id__in=asset_ids)
 
 
 class AssetDetailView(generics.RetrieveAPIView):
@@ -170,6 +212,72 @@ def dashboard_stats_view(request):
 
 
 @api_view(["GET"])
+def tier_summary_view(request):
+    """Return a summary of how many assets fall into each tier."""
+    from collections import Counter
+
+    tier_counts = Counter()
+
+    latest_per_asset = (
+        ScoreSnapshot.objects
+        .filter(model_name="10x_potential")
+        .values("asset_id")
+        .annotate(latest=Max("computed_at"))
+    )
+
+    for row in latest_per_asset:
+        asset = Asset.objects.filter(id=row["asset_id"]).first()
+        if not asset:
+            continue
+
+        scores = {}
+        for model_name in ["10x_potential", "undervaluation", "momentum", "risk"]:
+            snap = asset.score_snapshots.filter(model_name=model_name).order_by("-computed_at").first()
+            if snap:
+                scores[model_name] = snap
+
+        if not scores:
+            tier_counts["unclassified"] += 1
+            continue
+
+        tier_result = classify_tier(
+            score_10x=scores.get("10x_potential").score if "10x_potential" in scores else None,
+            score_risk=scores.get("risk").score if "risk" in scores else None,
+            score_momentum=scores.get("momentum").score if "momentum" in scores else None,
+            score_undervaluation=scores.get("undervaluation").score if "undervaluation" in scores else None,
+            data_confidence_10x=scores.get("10x_potential").data_confidence if "10x_potential" in scores else None,
+            data_confidence_risk=scores.get("risk").data_confidence if "risk" in scores else None,
+            data_confidence_momentum=scores.get("momentum").data_confidence if "momentum" in scores else None,
+            data_confidence_undervaluation=scores.get("undervaluation").data_confidence if "undervaluation" in scores else None,
+        )
+        tier_counts[tier_result.tier.value] += 1
+
+    tier_descriptions = {
+        "2x_safe": "Lower risk, established projects with steady fundamentals.",
+        "3x_growth": "Balanced risk/reward. Solid projects with room to grow.",
+        "10x_potential": "Higher risk, high reward. Strong signals across metrics.",
+        "moonshot": "Speculative, very high risk. Could 50x or go to zero.",
+    }
+
+    tiers = []
+    for t in RewardTier:
+        tiers.append({
+            "tier": t.value,
+            "label": TIER_LABELS[t],
+            "count": tier_counts.get(t.value, 0),
+            "description": tier_descriptions[t.value],
+        })
+    tiers.append({
+        "tier": "unclassified",
+        "label": "Unclassified",
+        "count": tier_counts.get("unclassified", 0),
+        "description": "Not enough data to classify.",
+    })
+
+    return Response({"tiers": tiers, "total": sum(tier_counts.values())})
+
+
+@api_view(["GET"])
 def asset_search_view(request):
     q = request.query_params.get("q", "").strip()
     if len(q) < 2:
@@ -187,6 +295,7 @@ def asset_search_view(request):
 def api_root(request, format=None):
     return Response({
         "assets": reverse("asset-list", request=request, format=format),
+        "tiers": reverse("tier-summary", request=request, format=format),
         "protocols": reverse("protocol-list", request=request, format=format),
         "catalysts": reverse("catalyst-list", request=request, format=format),
         "dashboard": reverse("dashboard-stats", request=request, format=format),

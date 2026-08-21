@@ -2,9 +2,10 @@ import logging
 
 from celery import shared_task
 
-from core.models import Asset
+from core.models import Asset, ScoreSnapshot
 from core.scoring import momentum, potential_10x, risk, undervaluation
 from core.scoring.persistence import save_score_result
+from core.scoring.tiers import classify_tier, RewardTier
 
 logger = logging.getLogger(__name__)
 
@@ -82,3 +83,36 @@ def score_all_assets():
         scored += 1
 
     return {"scored": scored, "skipped_no_snapshot": skipped, "scorer_errors": errored}
+
+
+def compute_asset_tier(asset):
+    """Compute the reward tier for an asset based on its latest scores.
+
+    Called after all 4 scores are persisted. Looks up the most recent
+    ScoreSnapshot for each model and feeds them into the tier classifier.
+    """
+    latest = {}
+    for model_name in ["10x_potential", "undervaluation", "momentum", "risk"]:
+        snap = (
+            ScoreSnapshot.objects
+            .filter(asset=asset, model_name=model_name)
+            .order_by("-computed_at")
+            .first()
+        )
+        if snap:
+            latest[model_name] = snap
+
+    if not latest:
+        return None
+
+    tier_result = classify_tier(
+        score_10x=latest.get("10x_potential", ScoreSnapshot()).score if "10x_potential" in latest else None,
+        score_risk=latest.get("risk", ScoreSnapshot()).score if "risk" in latest else None,
+        score_momentum=latest.get("momentum", ScoreSnapshot()).score if "momentum" in latest else None,
+        score_undervaluation=latest.get("undervaluation", ScoreSnapshot()).score if "undervaluation" in latest else None,
+        data_confidence_10x=latest.get("10x_potential", ScoreSnapshot()).data_confidence if "10x_potential" in latest else Decimal("0"),
+        data_confidence_risk=latest.get("risk", ScoreSnapshot()).data_confidence if "risk" in latest else Decimal("0"),
+        data_confidence_momentum=latest.get("momentum", ScoreSnapshot()).data_confidence if "momentum" in latest else Decimal("0"),
+        data_confidence_undervaluation=latest.get("undervaluation", ScoreSnapshot()).data_confidence if "undervaluation" in latest else Decimal("0"),
+    )
+    return tier_result

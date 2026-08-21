@@ -87,11 +87,6 @@ USE_TZ = True
 STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-REST_FRAMEWORK = {
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    "PAGE_SIZE": 50,
-}
-
 CELERY_BROKER_URL = config("REDIS_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = config("REDIS_URL", default="redis://localhost:6379/0")
 CELERY_TASK_SERIALIZER = "json"
@@ -154,6 +149,25 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": 15 * 60,
     },
 }
+
+REST_FRAMEWORK = {
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 50,
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "core.auth.ExternalSiteJWTAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "core.permissions.SubscriptionRequired",
+    ],
+}
+
+# JWT — must match the main site's signing key and algorithm
+JWT_SIGNING_KEY = config("JWT_SIGNING_KEY", default="change-me-in-production")
+JWT_ALGORITHM = config("JWT_ALGORITHM", default="HS256")
+JWT_USER_ID_FIELD = config("JWT_USER_ID_FIELD", default="user_id")
+
+# Paystack — webhook secret from Paystack dashboard
+PAYSTACK_SECRET_KEY = config("PAYSTACK_SECRET_KEY", default="")
 
 COINGECKO_API_KEY = config("COINGECKO_API_KEY", default="")
 GITHUB_TOKEN = config("GITHUB_TOKEN", default="")

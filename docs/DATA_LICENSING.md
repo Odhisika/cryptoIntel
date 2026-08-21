@@ -157,3 +157,4 @@ flag specifically so this can't happen silently.
 | Cost | Free for public market data endpoints. |
 | Last verified | 2026-08-20 against Binance's public API docs and the market_data_only FAQ. |
 | Scope note | Used exclusively for market regime analysis (BTC/ETH trend, volume dominance, ETH/BTC ratio) — NOT as a replacement for CoinGecko for general asset price/MC/volume data. BTC "dominance" is volume-based (BTC USDT quote volume / total USDT quote volume), NOT market-cap-based — documented limitation in `core/providers/binance.py`. |
+pu

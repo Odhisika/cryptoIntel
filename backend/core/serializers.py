@@ -6,6 +6,7 @@ from .models import (
     HolderSnapshot, DeveloperActivitySnapshot, Catalyst,
     DataQualityIssue, DataIngestionJob,
 )
+from .scoring.tiers import classify_tier, TIER_LABELS, TIER_DESCRIPTIONS
 
 
 class AssetListSerializer(serializers.ModelSerializer):
@@ -17,6 +18,7 @@ class AssetListSerializer(serializers.ModelSerializer):
     score_undervaluation = serializers.SerializerMethodField()
     score_momentum = serializers.SerializerMethodField()
     score_risk = serializers.SerializerMethodField()
+    tier = serializers.SerializerMethodField()
 
     class Meta:
         model = Asset
@@ -25,6 +27,7 @@ class AssetListSerializer(serializers.ModelSerializer):
             "is_active", "created_at",
             "latest_price", "latest_market_cap", "latest_volume",
             "score_10x", "score_undervaluation", "score_momentum", "score_risk",
+            "tier",
         ]
 
     def _latest_snapshot(self, obj):
@@ -70,6 +73,35 @@ class AssetListSerializer(serializers.ModelSerializer):
         if not score:
             return None
         return {"score": str(score.score), "confidence": str(score.data_confidence), "version": score.model_version}
+
+    def get_tier(self, obj):
+        """Compute the risk/reward tier from the 4 scores."""
+        scores = {}
+        for model_name in ["10x_potential", "undervaluation", "momentum", "risk"]:
+            snap = obj.score_snapshots.filter(model_name=model_name).order_by("-computed_at").first()
+            if snap:
+                scores[model_name] = snap
+
+        if not scores:
+            return {"tier": "unclassified", "label": "Unclassified", "description": "Not enough data to classify."}
+
+        tier_result = classify_tier(
+            score_10x=scores.get("10x_potential").score if "10x_potential" in scores else None,
+            score_risk=scores.get("risk").score if "risk" in scores else None,
+            score_momentum=scores.get("momentum").score if "momentum" in scores else None,
+            score_undervaluation=scores.get("undervaluation").score if "undervaluation" in scores else None,
+            data_confidence_10x=scores.get("10x_potential").data_confidence if "10x_potential" in scores else None,
+            data_confidence_risk=scores.get("risk").data_confidence if "risk" in scores else None,
+            data_confidence_momentum=scores.get("momentum").data_confidence if "momentum" in scores else None,
+            data_confidence_undervaluation=scores.get("undervaluation").data_confidence if "undervaluation" in scores else None,
+        )
+        return {
+            "tier": tier_result.tier.value,
+            "label": tier_result.label,
+            "description": tier_result.description,
+            "confidence": str(tier_result.confidence),
+            "reasoning": tier_result.reasoning,
+        }
 
 
 class ScoreFactorSerializer(serializers.ModelSerializer):

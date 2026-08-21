@@ -10,3 +10,6 @@ pytest==8.2.*
 pytest-django==4.8.*
 gunicorn==22.0.*
 responses==0.25.*
+djangorestframework-simplejwt==5.3.*
+PyJWT==2.9.*
+cryptography==43.0.*

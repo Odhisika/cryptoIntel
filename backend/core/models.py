@@ -617,3 +617,48 @@ class Catalyst(models.Model):
 
     def __str__(self) -> str:
         return f"{self.asset.symbol}: {self.title} ({self.event_date}, {self.status})"
+
+
+class Subscription(models.Model):
+    """Tracks user subscription status, updated by Paystack webhook."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        EXPIRED = "expired", "Expired"
+        NONE = "none", "No Subscription"
+
+    user_id = models.CharField(
+        max_length=255, unique=True,
+        help_text="External user ID from the main site's JWT.",
+    )
+    email = models.EmailField(blank=True, default="")
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.NONE,
+    )
+    paystack_reference = models.CharField(max_length=255, blank=True, default="")
+    plan = models.CharField(
+        max_length=50, default="monthly",
+        help_text="Subscription plan name (e.g. monthly, yearly).",
+    )
+    starts_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user_id"]),
+            models.Index(fields=["status", "expires_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} — {self.status} ({self.plan})"
+
+    @property
+    def is_valid(self) -> bool:
+        if self.status != self.Status.ACTIVE:
+            return False
+        if self.expires_at is None:
+            return False
+        from django.utils import timezone
+        return timezone.now() < self.expires_at

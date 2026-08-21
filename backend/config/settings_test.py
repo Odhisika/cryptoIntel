@@ -12,3 +12,9 @@ DATABASES = {
         "NAME": ":memory:",
     }
 }
+
+# Deterministic values so auth/webhook tests don't depend on env vars or
+# the dev defaults from .env.
+JWT_SIGNING_KEY = "test-jwt-signing-key-not-for-production"
+JWT_ALGORITHM = "HS256"
+PAYSTACK_SECRET_KEY = "sk_test_paystack-webhook-secret-for-tests"
