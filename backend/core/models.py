@@ -662,3 +662,252 @@ class Subscription(models.Model):
             return False
         from django.utils import timezone
         return timezone.now() < self.expires_at
+
+
+class AlertRule(models.Model):
+    """A user-configurable alert rule (Roadmap Tier 1, Feature 2).
+
+    A rule watches ONE asset (or all tracked assets when `asset` is NULL)
+    and fires an AlertEvent whenever the latest snapshot crosses a
+    threshold. Rules are evaluated on a schedule by core.tasks.alerts and
+    never block ingestion — a rule that can't be evaluated simply doesn't
+    fire that cycle.
+
+    Channels are independent; a rule can fan out to email and/or Telegram.
+    Delivery is best-effort: a failed email/Telegram send is recorded on
+    the AlertEvent but does not take the whole rule down.
+    """
+
+    class Metric(models.TextChoices):
+        SCORE_10X = "score_10x", "10X Potential score"
+        SCORE_UNDERVALUATION = "score_undervaluation", "Undervaluation score"
+        SCORE_MOMENTUM = "score_momentum", "Momentum score"
+        SCORE_RISK = "score_risk", "Risk score"
+        MARKET_CAP_PCT_CHANGE_24H = "market_cap_pct_change_24h", "Market cap 24h % change"
+        VOLUME_PCT_CHANGE_24H = "volume_pct_change_24h", "Volume 24h % change"
+
+    class Operator(models.TextChoices):
+        GT = "gt", "greater than"
+        GTE = "gte", "greater than or equal"
+        LT = "lt", "less than"
+        LTE = "lte", "less than or equal"
+
+    class Channel(models.TextChoices):
+        EMAIL = "email", "Email"
+        TELEGRAM = "telegram", "Telegram"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_id = models.CharField(
+        max_length=255, db_index=True,
+        help_text="External user ID from the main site's JWT.",
+    )
+    email = models.EmailField(blank=True, default="")
+    telegram_chat_id = models.CharField(max_length=64, blank=True, default="")
+
+    name = models.CharField(max_length=120, help_text="Human label, e.g. 'SOL 10X score > 80'.")
+    asset = models.ForeignKey(
+        Asset, on_delete=models.CASCADE, null=True, blank=True,
+        help_text="The asset to watch, or NULL to watch all tracked assets.",
+    )
+
+    metric = models.CharField(max_length=30, choices=Metric.choices)
+    operator = models.CharField(max_length=5, choices=Operator.choices, default=Operator.GT)
+    threshold = models.DecimalField(max_digits=12, decimal_places=4)
+    channel = models.CharField(max_length=20, choices=Channel.choices, default=Channel.EMAIL)
+
+    is_active = models.BooleanField(default=True)
+    cooldown_minutes = models.PositiveIntegerField(
+        default=60,
+        help_text="Minimum minutes between two fires of this rule FOR THE SAME ASSET, to prevent alert spam.",
+    )
+    last_fired_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Most recent fire across any asset — informational only. Cooldown is enforced per (rule, asset) "
+        "using the alert history, so a global rule firing for one asset doesn't silence it for others.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user_id", "is_active"]),
+            models.Index(fields=["asset", "is_active"]),
+        ]
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        scope = self.asset.symbol if self.asset else "ALL"
+        return f"{scope}: {self.metric} {self.operator} {self.threshold} -> {self.channel}"
+
+    @property
+    def in_cooldown(self) -> bool:
+        """Legacy per-rule cooldown check. Prefer in_cooldown_for(asset)."""
+        if self.last_fired_at is None:
+            return False
+        from django.utils import timezone
+        from datetime import timedelta
+        return timezone.now() < self.last_fired_at + timedelta(minutes=self.cooldown_minutes)
+
+    def in_cooldown_for(self, asset) -> bool:
+        """Whether this rule is in cooldown for a SPECIFIC asset, based on the
+        most recent AlertEvent for that asset. Keeps a global rule able to
+        fire for multiple assets within one cycle without spamming any single
+        one."""
+        from django.utils import timezone
+        from datetime import timedelta
+        recent = self.events.filter(asset=asset).order_by("-fired_at").first()
+        if recent is None:
+            return False
+        return timezone.now() < recent.fired_at + timedelta(minutes=self.cooldown_minutes)
+
+
+class AlertEvent(models.Model):
+    """Append-only log of every time an alert rule fired (Feature 2 —
+    alert history). Records both the evaluation result and whether the
+    delivery (email/Telegram) succeeded, so users can audit what was sent
+    and a failed delivery is not silently lost."""
+
+    class Status(models.TextChoices):
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Delivery failed"
+        ERROR = "error", "Evaluation error"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    rule = models.ForeignKey(AlertRule, on_delete=models.CASCADE, related_name="events")
+    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name="alert_events")
+
+    metric = models.CharField(max_length=30)
+    operator = models.CharField(max_length=5)
+    threshold = models.DecimalField(max_digits=12, decimal_places=4)
+    observed_value = models.DecimalField(max_digits=30, decimal_places=6)
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.SENT)
+    channels = models.JSONField(default=list, blank=True)  # e.g. ["email", "telegram"]
+    error_detail = models.TextField(blank=True)
+
+    fired_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["rule", "fired_at"])]
+        ordering = ["-fired_at"]
+
+    def __str__(self) -> str:
+        return f"{self.rule} fired @ {self.fired_at.isoformat()} ({self.status})"
+
+
+class WebhookSubscription(models.Model):
+    """A user/B2B client's registered endpoint to receive pushed events
+    (Roadmap Tier 3, Feature 7 — webhook delivery for score changes).
+
+    A subscription points at a target URL and opts into one or more event
+    types from WebhookEvent.Event. When an event occurs (e.g. an asset's
+    reward tier changes after a scoring run), core/webhooks.py finds all
+    active subscriptions that match — either for that specific asset or
+    for ALL assets — and POSTs the payload, signed with an HMAC-SHA256
+    digest of the body using the subscription's shared `secret`, so the
+    receiving service can verify authenticity.
+
+    Delivery is best-effort: a non-2xx or transport failure is logged and
+    the last_delivery status recorded, but never raises out of the scoring
+    run.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_id = models.CharField(
+        max_length=255, db_index=True,
+        help_text="External user ID from the main site's JWT.",
+    )
+    name = models.CharField(max_length=120, help_text="Human label, e.g. 'Prod analytics endpoint'.")
+    target_url = models.URLField()
+
+    # Shared secret used to HMAC-sign event payloads (X-Webhook-Signature header).
+    secret = models.CharField(max_length=128, blank=True, default="")
+
+    # NULL = ALL assets; otherwise only events for this asset.
+    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, null=True, blank=True)
+
+    event_types = models.JSONField(
+        default=list, blank=True,
+        help_text="List of event types to receive, e.g. [\"score.changed\"]. Empty = all events.",
+    )
+
+    is_active = models.BooleanField(default=True)
+    last_delivery_at = models.DateTimeField(null=True, blank=True)
+    last_status = models.CharField(max_length=20, blank=True, default="")  # e.g. "ok" / "error"
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user_id", "is_active"])]
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        scope = self.asset.symbol if self.asset else "ALL"
+        return f"{self.name} ({self.target_url}, {scope})"
+
+    def accepts_event(self, event_type: str) -> bool:
+        return (not self.event_types) or event_type in self.event_types
+
+
+class ApiUsage(models.Model):
+    """Per-user daily API call count, for B2B per-1,000-call billing (Roadmap
+    Tier 3, Feature 7).
+
+    Every authenticated API request increments the current day's counter for
+    that user_id via an application-level middleware (not a raw DB UPDATE per
+    request — see core/middleware.py which batches using update_or_create so
+    the counter is coarse but cheap). Counts are rolled daily by the `date`
+    primary key, so a site can be billed on its monthly/weekly call volume
+    without keeping an unbounded per-request log.
+    """
+
+    id = models.BigAutoField(primary_key=True)
+    user_id = models.CharField(max_length=255, db_index=True)
+    date = models.DateField()
+    call_count = models.PositiveBigIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user_id", "date"], name="unique_daily_usage_per_user")
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} {self.date}: {self.call_count} calls"
+
+
+class TelegramBinding(models.Model):
+    """Links a Telegram chat to a user account so the bot can act on the
+    user's behalf (Roadmap Tier 3, Feature 8).
+
+    Identity is bound securely: the user runs /link in a Telegram chat, which
+    generates a one-time `verify_token` (replies to the chat with it). They
+    then POST it — along with the chat_id — to the JWT-authenticated
+    /api/v1/telegram/verify/ endpoint. Because that endpoint authenticates the
+    caller, only the true owner of a user_id can attach that account to a
+    Telegram chat; the binding flips to verified and /alerts becomes available.
+
+    `/score` and `/top` are public and never require a binding. Telegram
+    alerts created through the bot are stored as AlertRule rows with
+    telegram_chat_id set to this chat.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    chat_id = models.CharField(max_length=64, unique=True, db_index=True)
+    user_id = models.CharField(max_length=255, db_index=True)
+    telegram_username = models.CharField(max_length=128, blank=True, default="")
+
+    verify_token = models.CharField(max_length=64, blank=True, default="")
+    is_verified = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user_id", "is_verified"])]
+        ordering = ["-updated_at"]
+
+    def __str__(self) -> str:
+        return f"chat {self.chat_id} -> user {self.user_id} ({'verified' if self.is_verified else 'unverified'})"

@@ -53,6 +53,7 @@ docker compose exec web python manage.py populate_protocols
 docker compose exec web python manage.py populate_dex_data
 docker compose exec web python manage.py populate_market_regime
 docker compose exec web python manage.py show_rankings 10x_potential
+docker compose exec web python manage.py run_backtest
 
 # Restart after code changes
 docker compose build web && docker compose up -d
@@ -141,6 +142,10 @@ All configurable via env vars (or a `.env` file in the project root).
 | `COINGECKO_API_KEY` | *(empty)* | CoinGecko API key (optional) |
 | `GITHUB_TOKEN` | *(empty)* | GitHub API token (optional) |
 | `BINANCE_API_KEY` | *(empty)* | Binance API key (optional) |
+| `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | Alert email backend (use `smtp.EmailBackend` for SendGrid/SES in prod) |
+| `EMAIL_HOST` / `EMAIL_PORT` / `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD` / `EMAIL_USE_TLS` | *(empty)* / `587` / *(empty)* | SMTP settings for email alerts |
+| `DEFAULT_FROM_EMAIL` | `Crypto Intel <alerts@example.com>` | From address for alert emails |
+| `TELEGRAM_BOT_TOKEN` | *(empty)* | Telegram bot token for alert delivery |
 
 ---
 
@@ -183,6 +188,7 @@ Once Celery Beat is running, all of this happens automatically on schedule:
 | Price ingestion | every 15 min |
 | Scoring | every 15 min |
 | Market regime (Binance) | every 15 min |
+| **Alerts** | **every 15 min** |
 | TVL ingestion | hourly |
 | Fee/revenue ingestion | hourly |
 | DEX Screener ingestion | hourly |
@@ -199,10 +205,65 @@ GET /api/v1/scores/           — List all score snapshots
 GET /api/v1/snapshots/        — List market snapshots
 GET /api/v1/dex-pairs/        — List DEX pair snapshots
 GET /api/v1/market-regimes/   — List market regime snapshots
+GET /api/v1/backtest/         — Historical score accuracy stats (win rate, avg return, Sharpe per tier/horizon)
+GET /api/v1/alerts/rules/     — List/create alert rules (auth)
+GET/PATCH/DELETE /api/v1/alerts/rules/<id>/  — Manage one alert rule (auth)
+GET /api/v1/alerts/history/   — Alert history log (auth)
+GET/POST /api/v1/webhooks/    — List/create score-change webhooks (auth)
+GET/PATCH/DELETE /api/v1/webhooks/<id>/  — Manage one webhook (auth)
+GET /api/v1/usage/            — Per-1,000-call API usage for the authenticated user (auth)
+POST /api/v1/telegram/verify/ — Verify a Telegram chat↔account binding (auth)
+POST /api/webhooks/telegram/  — Telegram bot update webhook (CSRF-exempt, optional secret token)
+POST /api/webhooks/paystack/  — Paystack payment webhook (signature-verified)
+GET /api/docs/                — Interactive Swagger UI (API documentation portal)
+GET /api/redoc/               — ReDoc documentation portal
+GET /api/schema/              — Raw OpenAPI schema (JSON)
 GET /admin/                   — Django admin
 ```
 
 All endpoints support `?page=1&page_size=50` pagination.
+
+---
+
+## Telegram Bot
+
+The bot receives user messages via the `POST /api/webhooks/telegram/` webhook
+and replies through the Bot API. Register the webhook once with:
+
+```
+python manage.py set_telegram_webhook          # uses TELEGRAM_PUBLIC_BASE_URL
+python manage.py set_telegram_webhook --unset  # remove it
+```
+
+Commands:
+- `/start`, `/help` — help + quick-action reply keyboard
+- `/score <symbol>` — instant 4-score + tier lookup for a token
+- `/top [n]` — top 10X candidates by 10x_potential score (default 5)
+- `/alerts` / `/alerts add <metric> <op> <value> [symbol|all]` / `/alerts remove <id>` — manage Telegram alert rules (`/alerts` needs `/link`)
+- `/link` — connect the chat to your account; the one-time verify token is confirmed via the JWT-authenticated `POST /api/v1/telegram/verify/`
+
+Set `TELEGRAM_BOT_TOKEN` (and optionally `TELEGRAM_WEBHOOK_SECRET`) in your env.
+
+---
+
+## Weekly Email Digest
+
+Every Monday 09:00 UTC, active subscribers (an ACTIVE `Subscription` with an email
+address) receive a weekly digest email — top 10X candidates, the latest market
+regime (BTC/ETH price, 7-day change, 50-DMA position), and the biggest score
+movers (10x_potential score gainers + decliners with tier changes).
+
+Scheduled via Celery Beat (`send-weekly-digest-monday-0900-utc` →
+`core/tasks/digest.send_weekly_email_digest`). Compose/send on demand with:
+
+```
+python manage.py send_weekly_digest                 # email all active subscribers
+python manage.py send_weekly_digest --email you@example.com   # just one address
+python manage.py send_weekly_digest --dry-run       # print, don't email
+```
+
+Composition and data gathering live in `core/digest.py` (pure/testable); a single
+recipient's delivery failure is isolated so one bad mailbox never cancels the rest.
 
 ---
 
@@ -218,11 +279,12 @@ crypto-intel/
 │   ├── core/
 │   │   ├── providers/       # API integrations (CoinGecko, DefiLlama, DEX Screener, Binance)
 │   │   ├── scoring/         # 4 scoring engines + helpers
-│   │   ├── tasks/           # Celery tasks (ingestion, scoring)
+│   │   ├── tasks/           # Celery tasks (ingestion, scoring, alerts, digest)
+│   │   ├── digest.py        # Weekly email digest composition + delivery
 │   │   ├── management/      # Management commands
 │   │   ├── migrations/      # Database migrations
 │   │   ├── models.py        # All database models
-│   │   └── tests/           # 438 tests
+│   │   └── tests/           # 649 tests
 │   └── requirements.txt
 └── docs/
     └── DATA_LICENSING.md    # API rate limits, licensing notes

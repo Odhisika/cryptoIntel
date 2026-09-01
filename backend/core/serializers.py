@@ -4,7 +4,8 @@ from .models import (
     Asset, MarketSnapshot, ScoreSnapshot, ScoreFactor,
     Protocol, TVLSnapshot, FeeSnapshot, RevenueSnapshot,
     HolderSnapshot, DeveloperActivitySnapshot, Catalyst,
-    DataQualityIssue, DataIngestionJob,
+    DataQualityIssue, DataIngestionJob, AlertRule, AlertEvent,
+    WebhookSubscription, ApiUsage,
 )
 from .scoring.tiers import classify_tier, TIER_LABELS, TIER_DESCRIPTIONS
 
@@ -255,19 +256,19 @@ class ProtocolSerializer(serializers.ModelSerializer):
             "latest_tvl", "latest_fees", "latest_revenue", "asset_symbol",
         ]
 
-    def get_latest_tvl(self, obj):
+    def get_latest_tvl(self, obj) -> str | None:
         tvl = obj.tvl_snapshots.first()
         return str(tvl.tvl_usd) if tvl else None
 
-    def get_latest_fees(self, obj):
+    def get_latest_fees(self, obj) -> str | None:
         fee = obj.fee_snapshots.first()
         return str(fee.fees_24h_usd) if fee else None
 
-    def get_latest_revenue(self, obj):
+    def get_latest_revenue(self, obj) -> str | None:
         rev = obj.revenue_snapshots.first()
         return str(rev.revenue_24h_usd) if rev else None
 
-    def get_asset_symbol(self, obj):
+    def get_asset_symbol(self, obj) -> str | None:
         return obj.asset.symbol if obj.asset else None
 
 
@@ -302,3 +303,82 @@ class IngestionJobSerializer(serializers.ModelSerializer):
             "assets_attempted", "assets_succeeded", "error_summary",
             "started_at", "finished_at",
         ]
+
+
+class AlertRuleSerializer(serializers.ModelSerializer):
+    asset_symbol = serializers.CharField(source="asset.symbol", read_only=True)
+    metric_display = serializers.CharField(source="get_metric_display", read_only=True)
+    operator_display = serializers.CharField(source="get_operator_display", read_only=True)
+    channel_display = serializers.CharField(source="get_channel_display", read_only=True)
+
+    class Meta:
+        model = AlertRule
+        fields = [
+            "id", "name", "asset", "asset_symbol",
+            "metric", "metric_display",
+            "operator", "operator_display",
+            "threshold", "channel", "channel_display",
+            "email", "telegram_chat_id",
+            "is_active", "cooldown_minutes", "last_fired_at",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "last_fired_at", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        channel = attrs.get("channel", getattr(self.instance, "channel", None))
+        email = attrs.get("email", getattr(self.instance, "email", ""))
+        telegram = attrs.get("telegram_chat_id", getattr(self.instance, "telegram_chat_id", ""))
+        if channel == AlertRule.Channel.EMAIL and not email:
+            raise serializers.ValidationError("Email channel requires an 'email' address.")
+        if channel == AlertRule.Channel.TELEGRAM and not telegram:
+            raise serializers.ValidationError("Telegram channel requires a 'telegram_chat_id'.")
+        return attrs
+
+
+class AlertEventSerializer(serializers.ModelSerializer):
+    asset_symbol = serializers.CharField(source="asset.symbol", read_only=True)
+    rule_name = serializers.CharField(source="rule.name", read_only=True)
+    metric_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AlertEvent
+        fields = [
+            "id", "rule", "rule_name", "asset", "asset_symbol",
+            "metric", "metric_display", "operator", "threshold",
+            "observed_value", "status", "channels", "error_detail", "fired_at",
+        ]
+
+    def get_metric_display(self, obj):
+        return AlertRule.Metric(obj.metric).label if obj.metric in AlertRule.Metric.values else obj.metric
+
+
+class WebhookSubscriptionSerializer(serializers.ModelSerializer):
+    asset_symbol = serializers.CharField(source="asset.symbol", read_only=True)
+
+    class Meta:
+        model = WebhookSubscription
+        fields = [
+            "id", "name", "target_url", "secret",
+            "asset", "asset_symbol", "event_types",
+            "is_active", "last_delivery_at", "last_status",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "last_delivery_at", "last_status", "created_at", "updated_at"]
+        extra_kwargs = {
+            "secret": {"write_only": True, "help_text": "Shared secret used to HMAC-sign event payloads."},
+        }
+
+    def validate(self, attrs):
+        event_types = attrs.get("event_types", getattr(self.instance, "event_types", []))
+        from core.webhooks import Event
+        valid = {Event.SCORE_CHANGED}
+        unknown = set(event_types) - valid
+        if unknown:
+            raise serializers.ValidationError(f"Unknown event types: {sorted(unknown)}")
+        return attrs
+
+
+class ApiUsageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ApiUsage
+        fields = ["date", "call_count", "updated_at"]

@@ -28,10 +28,17 @@ class SubscriptionRequired(permissions.BasePermission):
 
 
 class IsAdminOrSubscriptionRequired(permissions.BasePermission):
-    """Admin users bypass subscription check."""
+    """Admin users bypass subscription check.
+
+    Admin is only meaningful for Django session-auth (real User objects).
+    JWT-authenticated requests have a string in request.user (the user id),
+    so they never short-circuit here and always fall through to the
+    subscription check below.
+    """
 
     def has_permission(self, request, view):
-        if request.user and request.user.is_staff:
+        user = request.user if hasattr(request, "user") else None
+        if user is not None and not isinstance(user, str) and user.is_staff:
             return True
 
         user_id = request.auth

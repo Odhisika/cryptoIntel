@@ -53,10 +53,9 @@ class TestValidToken:
         result = auth_backend.authenticate(make_request(factory, f"Bearer {token}"))
 
         assert result is not None
-        user_id, payload = result
+        user_id, auth = result
         assert user_id == "site-user-42"
-        assert payload["user_id"] == "site-user-42"
-        assert payload["email"] == "user@example.com"
+        assert auth == "site-user-42"
 
     def test_lowercase_bearer_keyword_is_accepted(self, auth_backend, factory):
         token = encode_token(VALID_PAYLOAD)
@@ -66,14 +65,17 @@ class TestValidToken:
         assert result is not None
         assert result[0] == "site-user-42"
 
-    def test_returned_payload_is_the_decoded_claims(self, auth_backend, factory):
+    def test_returned_auth_is_the_user_id_string(self, auth_backend, factory):
         payload = {"user_id": "u-abc", "role": "member", "exp": datetime.now(timezone.utc) + timedelta(hours=1)}
         token = encode_token(payload)
 
-        _, returned_payload = auth_backend.authenticate(make_request(factory, f"Bearer {token}"))
+        user, auth = auth_backend.authenticate(make_request(factory, f"Bearer {token}"))
 
-        assert returned_payload["user_id"] == "u-abc"
-        assert returned_payload["role"] == "member"
+        assert user == "u-abc"
+        # request.auth must be the user_id string, not the raw JWT payload,
+        # because the default SubscriptionRequired permission looks the
+        # subscription up by request.auth. See core/permissions.
+        assert auth == "u-abc"
 
 
 class TestExpiredToken:

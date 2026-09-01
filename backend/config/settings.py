@@ -5,6 +5,7 @@ TLS, and secrets management before public launch.
 """
 
 from pathlib import Path
+from celery.schedules import crontab
 from decouple import config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -22,6 +23,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "django_celery_beat",
+    "drf_spectacular",
     "core",
 ]
 
@@ -148,6 +150,21 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.regime_ingestion.ingest_market_regime",
         "schedule": 15 * 60,
     },
+    # Real-Time Alerts (Feature 2): evaluate rules and dispatch email/Telegram
+    # deliveries. Runs on the same cadence as scoring so a fresh score crossing
+    # a user's threshold is picked up within one cycle. Rule evaluation is cheap
+    # (a handful of indexed lookups per rule); raise the interval if the rule
+    # table grows large enough to make a full pass expensive.
+    "process-alerts-every-15-min": {
+        "task": "core.tasks.alerts.process_alerts",
+        "schedule": 15 * 60,
+    },
+    # Weekly Email Digest (Feature 9): send every Monday 09:00 UTC to active
+    # subscribers. To change the cadence, edit the crontab entry below.
+    "send-weekly-digest-monday-0900-utc": {
+        "task": "core.tasks.digest.send_weekly_email_digest",
+        "schedule": crontab(minute=0, hour=9, day_of_week=1),
+    },
 }
 
 REST_FRAMEWORK = {
@@ -159,6 +176,25 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "core.permissions.SubscriptionRequired",
     ],
+    # OpenAPI schema generation (Feature 7 — API docs portal)
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# API documentation portal (Feature 7) — Swagger UI + Redoc served from the
+# /api/schema/ and /api/docs/ and /api/redoc/ URLs.
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Crypto Intel API",
+    "DESCRIPTION": (
+        "10x gem scanner — market data ingestion, multi-dimensional scoring, "
+        "and risk/reward tiers for crypto assets. Includes real-time alerts "
+        "and historical score-accuracy backtesting."
+    ),
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "COMPONENT_SPLIT_REQUEST": True,
+    # Every data endpoint requires JWT authentication (the default permission
+    # is SubscriptionRequired), so advertise the Bearer requirement globally.
+    "SECURITY": [{"externalSiteJWT": []}],
 }
 
 # JWT — must match the main site's signing key and algorithm
@@ -172,3 +208,26 @@ PAYSTACK_SECRET_KEY = config("PAYSTACK_SECRET_KEY", default="")
 COINGECKO_API_KEY = config("COINGECKO_API_KEY", default="")
 GITHUB_TOKEN = config("GITHUB_TOKEN", default="")
 BINANCE_API_KEY = config("BINANCE_API_KEY", default="")
+
+# --- Real-Time Alerts (Feature 2) ---
+# Email: dev default is the console backend (prints to stdout, no external
+# send). Point EMAIL_BACKEND at SMTP (e.g. SendGrid/SES) in production and
+# set EMAIL_HOST_USER / EMAIL_HOST_PASSWORD / DEFAULT_FROM_EMAIL.
+EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = config("EMAIL_HOST", default="")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="Crypto Intel <alerts@example.com>")
+EMAIL_SUBJECT_PREFIX = config("EMAIL_SUBJECT_PREFIX", default="[Crypto Intel] ")
+
+# Telegram: token for the bot that delivers /score, /alerts and alert
+# messages. See Feature 2 / Roadmap Tier 3 Feature 8 for the bot itself.
+TELEGRAM_BOT_TOKEN = config("TELEGRAM_BOT_TOKEN", default="")
+# Optional secret Telegram sends in X-Telegram-Bot-Api-Secret-Token on every
+# webhook call; when set, /webhooks/telegram/ rejects calls without it.
+TELEGRAM_WEBHOOK_SECRET = config("TELEGRAM_WEBHOOK_SECRET", default="")
+# Public base URL (scheme + host) of this deployment, used to register the bot
+# webhook: <base>/api/webhooks/telegram/ via set_telegram_webhook.
+TELEGRAM_PUBLIC_BASE_URL = config("TELEGRAM_PUBLIC_BASE_URL", default="https://example.com")

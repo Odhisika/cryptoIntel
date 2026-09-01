@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 
 from celery import shared_task
 
@@ -6,6 +7,7 @@ from core.models import Asset, ScoreSnapshot
 from core.scoring import momentum, potential_10x, risk, undervaluation
 from core.scoring.persistence import save_score_result
 from core.scoring.tiers import classify_tier, RewardTier
+from core.webhooks import dispatch_score_change
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +40,25 @@ def score_all_assets():
     """Compute and persist all 4 scores for every active asset's latest
     MarketSnapshot. Assets with no snapshot yet are skipped (nothing to
     score) rather than erroring the whole batch. See OTHER_SCORERS'
-    comment above for why momentum runs in its own first pass."""
+    comment above for why momentum runs in its own first pass.
+
+    Score changes that cross a reward-tier boundary fire a `score.changed`
+    webhook to every matching subscription (Feature 7) — the pre-batch tier is
+    captured before any scores are mutated so the before/after comparison is
+    honest."""
 
     assets_with_snapshots = []
     skipped = 0
+    pre_tiers = {}
     for asset in Asset.objects.filter(is_active=True):
         latest = asset.market_snapshots.order_by("-observed_at").first()
         if latest is None:
             skipped += 1
             continue
         assets_with_snapshots.append((asset, latest))
+        # Capture the tier BEFORE this batch mutates any scores.
+        pre = compute_asset_tier(asset)
+        pre_tiers[asset.id] = pre.tier.value if pre else None
 
     errored = 0
 
@@ -66,6 +77,7 @@ def score_all_assets():
     # Pass 2: everything else, now free to rely on the full batch's
     # momentum data already being present.
     scored = 0
+    webhooks_fired = 0
     for asset, latest in assets_with_snapshots:
         for module, attr_name in OTHER_SCORERS:
             try:
@@ -82,7 +94,33 @@ def score_all_assets():
                 continue
         scored += 1
 
-    return {"scored": scored, "skipped_no_snapshot": skipped, "scorer_errors": errored}
+        # Feature 7 — push score.changed webhooks when the reward tier moved.
+        try:
+            new_tier = compute_asset_tier(asset)
+            new_tier_value = new_tier.tier.value if new_tier else None
+            if new_tier is not None and pre_tiers.get(asset.id) != new_tier_value:
+                s10x = (
+                    ScoreSnapshot.objects
+                    .filter(asset=asset, model_name="10x_potential")
+                    .order_by("-computed_at")
+                    .first()
+                )
+                webhooks_fired += dispatch_score_change(
+                    asset=asset,
+                    tier_before=pre_tiers.get(asset.id),
+                    tier_after=new_tier_value,
+                    score_10x=s10x.score if s10x else None,
+                )
+        except Exception:
+            # A webhook failure must never fail the scoring run.
+            logger.exception("Webhook dispatch failed for asset=%s", asset.symbol)
+
+    return {
+        "scored": scored,
+        "skipped_no_snapshot": skipped,
+        "scorer_errors": errored,
+        "score_change_webhooks_delivered": webhooks_fired,
+    }
 
 
 def compute_asset_tier(asset):

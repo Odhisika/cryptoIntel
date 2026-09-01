@@ -16,6 +16,12 @@ from core.models import (
     ScoreFactor,
     ScoreSnapshot,
     TVLSnapshot,
+    AlertRule,
+    AlertEvent,
+    Subscription,
+    WebhookSubscription,
+    ApiUsage,
+    TelegramBinding,
 )
 
 
@@ -123,3 +129,46 @@ class ScoreSnapshotAdmin(admin.ModelAdmin):
     list_filter = ("model_name", "model_version")
     search_fields = ("asset__symbol",)
     inlines = [ScoreFactorInline]
+
+
+@admin.register(AlertRule)
+class AlertRuleAdmin(admin.ModelAdmin):
+    list_display = ("name", "user_id", "asset", "metric", "operator", "threshold", "channel", "is_active", "last_fired_at")
+    list_filter = ("metric", "channel", "is_active")
+    search_fields = ("user_id", "name", "asset__symbol")
+
+
+@admin.register(AlertEvent)
+class AlertEventAdmin(admin.ModelAdmin):
+    list_display = ("rule", "asset", "metric", "status", "fired_at")
+    list_filter = ("status", "metric")
+    search_fields = ("rule__name", "asset__symbol", "rule__user_id")
+    date_hierarchy = "fired_at"
+
+
+@admin.register(Subscription)
+class SubscriptionAdmin(admin.ModelAdmin):
+    list_display = ("user_id", "email", "plan", "status", "expires_at")
+    list_filter = ("status", "plan")
+    search_fields = ("user_id", "email")
+
+
+@admin.register(WebhookSubscription)
+class WebhookSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ("name", "user_id", "target_url", "asset", "is_active", "last_status", "last_delivery_at")
+    list_filter = ("is_active", "last_status")
+    search_fields = ("user_id", "name", "target_url", "asset__symbol")
+
+
+@admin.register(ApiUsage)
+class ApiUsageAdmin(admin.ModelAdmin):
+    list_display = ("user_id", "date", "call_count")
+    list_filter = ("date",)
+    search_fields = ("user_id",)
+
+
+@admin.register(TelegramBinding)
+class TelegramBindingAdmin(admin.ModelAdmin):
+    list_display = ("chat_id", "user_id", "telegram_username", "is_verified", "updated_at")
+    list_filter = ("is_verified",)
+    search_fields = ("chat_id", "user_id", "telegram_username")

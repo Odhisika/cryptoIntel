@@ -5,20 +5,25 @@ from django.db.models.functions import Coalesce
 from django.shortcuts import render, get_object_or_404
 from rest_framework import generics
 from rest_framework.decorators import api_view
+from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer, OpenApiParameter, OpenApiRequest
+from rest_framework import serializers as drf_serializers
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 
 from .models import (
     Asset, MarketSnapshot, ScoreSnapshot, ScoreFactor,
     Protocol, TVLSnapshot, Catalyst, DataIngestionJob, DataQualityIssue,
+    AlertRule, AlertEvent, WebhookSubscription, ApiUsage,
 )
 from .serializers import (
     AssetListSerializer, AssetDetailSerializer,
     ScoreSnapshotSerializer, ProtocolSerializer,
     CatalystSerializer, IngestionJobSerializer,
-    DataQualityIssueSerializer,
+    DataQualityIssueSerializer, AlertRuleSerializer, AlertEventSerializer,
+    WebhookSubscriptionSerializer, ApiUsageSerializer,
 )
 from .scoring.tiers import classify_tier, RewardTier, TIER_LABELS
+from core.backtest import build_backtest_report
 
 
 class AssetListView(generics.ListAPIView):
@@ -185,6 +190,195 @@ class CatalystListView(generics.ListAPIView):
         return qs
 
 
+class AlertRuleListCreateView(generics.ListCreateAPIView):
+    """Create and list alert rules for the authenticated user."""
+
+    serializer_class = AlertRuleSerializer
+
+    def get_queryset(self):
+        user_id = self.request.auth
+        return AlertRule.objects.select_related("asset").filter(user_id=user_id).order_by("-updated_at")
+
+    def perform_create(self, serializer):
+        serializer.save(user_id=self.request.auth)
+
+
+class AlertRuleDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete one of the authenticated user's alert rules."""
+
+    serializer_class = AlertRuleSerializer
+    lookup_field = "id"
+
+    def get_queryset(self):
+        user_id = self.request.auth
+        return AlertRule.objects.select_related("asset").filter(user_id=user_id)
+
+
+class AlertEventListView(generics.ListAPIView):
+    """Alert history log for the authenticated user (Feature 2)."""
+
+    serializer_class = AlertEventSerializer
+
+    def get_queryset(self):
+        user_id = self.request.auth
+        qs = (
+            AlertEvent.objects
+            .filter(rule__user_id=user_id)
+            .select_related("rule", "asset")
+            .order_by("-fired_at")
+        )
+        rule_id = self.request.query_params.get("rule")
+        if rule_id:
+            qs = qs.filter(rule_id=rule_id)
+        status = self.request.query_params.get("status")
+        if status:
+            qs = qs.filter(status=status)
+        return qs
+
+
+@extend_schema(
+    tags=["Webhooks"],
+    request=WebhookSubscriptionSerializer,
+    responses={200: WebhookSubscriptionSerializer(many=True), 201: WebhookSubscriptionSerializer()},
+)
+class WebhookSubscriptionListCreateView(generics.ListCreateAPIView):
+    """List and create webhook subscriptions for the authenticated user (B2B,
+    Feature 7). Each subscription targets a URL that will receive pushed
+    score.changed events, signed with its shared secret."""
+
+    serializer_class = WebhookSubscriptionSerializer
+
+    def get_queryset(self):
+        user_id = self.request.auth
+        return (
+            WebhookSubscription.objects
+            .select_related("asset")
+            .filter(user_id=user_id)
+            .order_by("-updated_at")
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(user_id=self.request.auth)
+
+
+@extend_schema(
+    tags=["Webhooks"],
+    request=WebhookSubscriptionSerializer,
+    responses={200: WebhookSubscriptionSerializer()},
+)
+class WebhookSubscriptionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update, or delete one of the authenticated user's webhook
+    subscriptions (Feature 7)."""
+
+    serializer_class = WebhookSubscriptionSerializer
+    lookup_field = "id"
+
+    def get_queryset(self):
+        return WebhookSubscription.objects.filter(user_id=self.request.auth)
+
+
+@extend_schema(
+    tags=["Usage"],
+    responses={200: drf_serializers.DictField()},
+)
+class ApiUsageView(generics.ListAPIView):
+    """API call usage for the authenticated user, for B2B per-1,000-call
+    billing (Feature 7). Lists daily call counts, most recent first."""
+
+    serializer_class = ApiUsageSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return ApiUsage.objects.filter(user_id=self.request.auth).order_by("-date")
+
+
+@extend_schema(
+    tags=["Telegram"],
+    request=OpenApiRequest(
+        drf_serializers.DictField(),
+        examples=None,
+    ),
+    responses={200: drf_serializers.DictField()},
+)
+@api_view(["POST"])
+def telegram_bind_view(request):
+    """Verify a Telegram binding (Feature 8). Authenticated: the caller proves
+    they own the user_id attached to the JWT, so only the real account owner
+    can bind their chat to /alerts."""
+    from core.models import TelegramBinding
+
+    try:
+        chat_id = str(request.data.get("chat_id", "")).strip()
+        verify_token = str(request.data.get("verify_token", "")).strip()
+    except AttributeError:
+        return Response({"error": "chat_id and verify_token required"}, status=400)
+
+    if not chat_id or not verify_token:
+        return Response({"error": "chat_id and verify_token required"}, status=400)
+
+    try:
+        binding = TelegramBinding.objects.get(chat_id=chat_id)
+    except TelegramBinding.DoesNotExist:
+        return Response({"error": "No pending link for this chat_id. Run /link first."}, status=404)
+
+    if not binding.verify_token or binding.verify_token != verify_token:
+        return Response({"error": "Invalid verify_token."}, status=400)
+
+    binding.user_id = self_user_id = request.auth
+    binding.is_verified = True
+    binding.verify_token = ""
+    binding.save(update_fields=["user_id", "is_verified", "verify_token", "updated_at"])
+
+    return Response({"ok": True, "chat_id": chat_id, "user_id": self_user_id})
+
+
+@extend_schema(
+    responses={200: drf_serializers.DictField()},
+)
+@api_view(["GET"])
+def backtest_accuracy_view(request):
+    """Historical score accuracy / backtest stats (Feature 3).
+
+    Returns forward-return performance (win rate, avg return, annualized
+    Sharpe) per reward tier and horizon, plus a saleable headline. Optionally
+    narrow to a model version with ?model_version=v1.0.
+    """
+    from decimal import Decimal
+
+    model_version = request.query_params.get("model_version") or None
+    report = build_backtest_report(model_version=model_version)
+
+    body = _decimal_to_str(report)
+    body["model_version"] = model_version
+    return Response(body)
+
+
+def _decimal_to_str(obj):
+    """Recursively convert Decimal values in the report to strings so the
+    response is clean JSON (DRF's Response canonicalizes Decimals to floats,
+    which we want to avoid for money-ish numbers)."""
+    if isinstance(obj, dict):
+        return {k: _decimal_to_str(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_decimal_to_str(v) for v in obj]
+    if isinstance(obj, Decimal):
+        return str(obj)
+    return obj
+
+
+@extend_schema(
+    responses=OpenApiResponse(
+        response=inline_serializer(
+            name="DashboardStats",
+            fields={
+                "total_assets": drf_serializers.IntegerField(),
+                "total_scores": drf_serializers.IntegerField(),
+                "sector_breakdown": drf_serializers.ListField(child=drf_serializers.DictField()),
+                "latest_ingestion_job": drf_serializers.DictField(allow_null=True),
+            },
+        )
+    ),
+)
 @api_view(["GET"])
 def dashboard_stats_view(request):
     total_assets = Asset.objects.filter(is_active=True).count()
@@ -211,6 +405,27 @@ def dashboard_stats_view(request):
     })
 
 
+@extend_schema(
+    responses=OpenApiResponse(
+        response=inline_serializer(
+            name="TierSummary",
+            fields={
+                "tiers": drf_serializers.ListField(
+                    child=inline_serializer(
+                        name="TierSummaryEntry",
+                        fields={
+                            "tier": drf_serializers.CharField(),
+                            "label": drf_serializers.CharField(),
+                            "count": drf_serializers.IntegerField(),
+                            "description": drf_serializers.CharField(),
+                        },
+                    )
+                ),
+                "total": drf_serializers.IntegerField(),
+            },
+        )
+    ),
+)
 @api_view(["GET"])
 def tier_summary_view(request):
     """Return a summary of how many assets fall into each tier."""
@@ -277,6 +492,10 @@ def tier_summary_view(request):
     return Response({"tiers": tiers, "total": sum(tier_counts.values())})
 
 
+@extend_schema(
+    parameters=[OpenApiParameter(name="q", required=False, description="Token symbol or name search")],
+    responses={200: drf_serializers.ListField(child=drf_serializers.DictField())},
+)
 @api_view(["GET"])
 def asset_search_view(request):
     q = request.query_params.get("q", "").strip()
@@ -300,6 +519,10 @@ def api_root(request, format=None):
         "catalysts": reverse("catalyst-list", request=request, format=format),
         "dashboard": reverse("dashboard-stats", request=request, format=format),
         "search": reverse("asset-search", request=request, format=format),
+        "backtest": reverse("backtest-accuracy", request=request, format=format),
+        "alerts": reverse("alert-rule-list", request=request, format=format),
+        "webhooks": reverse("webhook-list", request=request, format=format),
+        "usage": reverse("api-usage", request=request, format=format),
     })
 
 
